@@ -1,0 +1,7 @@
+{
+  "name": "A.I. ADHD Coach",
+  "description": "An AI-powered coach designed to help with focus, organization, and motivation through real-time voice conversations. Get strategies and support tailored to managing ADHD challenges.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
