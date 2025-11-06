@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Message, SessionState } from './types';
 import { prepareAudioChunk, decode, decodeAudioData } from './utils/audioUtils';
 import { VoiceActivityDetector } from './utils/voiceActivityDetection';
+import { useConversations } from './utils/useConversations';
 import ConversationMessage from './components/ConversationMessage';
 import Controls from './components/Controls';
 import StatusIndicator from './components/StatusIndicator';
@@ -34,6 +35,10 @@ const App: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [retryCount, setRetryCount] = useState(0);
   const [isAISpeaking, setIsAISpeaking] = useState(false);
+  const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
+
+  // Supabase conversation management
+  const { saveCurrentConversation, savingConversation } = useConversations();
 
   // Refs for audio and WebSocket
   const wsRef = useRef<WebSocket | null>(null);
@@ -88,6 +93,21 @@ const App: React.FC = () => {
     setSessionState(SessionState.IDLE);
     setErrorMessage('');
     setRetryCount(0);
+    
+    // Save conversation to Supabase if there are messages
+    if (transcript.length > 0) {
+      try {
+        const durationSeconds = sessionStartTime 
+          ? Math.floor((Date.now() - sessionStartTime) / 1000)
+          : 0;
+        
+        const sessionId = `session-${Date.now()}`;
+        await saveCurrentConversation(sessionId, transcript, durationSeconds);
+      } catch (error) {
+        console.error('Failed to save conversation:', error);
+      }
+    }
+    
     if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.close();
     }
@@ -98,7 +118,8 @@ const App: React.FC = () => {
     }
     audioSourcesRef.current.clear();
     nextStartTimeRef.current = 0;
-  }, [stopAudioProcessing]);
+    setSessionStartTime(null);
+  }, [stopAudioProcessing, transcript, sessionStartTime, saveCurrentConversation]);
 
 
   const handleRetry = useCallback(() => {
@@ -230,6 +251,7 @@ const App: React.FC = () => {
     outputTranscriptionRef.current = '';
     setSessionState(SessionState.CONNECTING);
     setErrorMessage('');
+    setSessionStartTime(Date.now());
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 

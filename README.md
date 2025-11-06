@@ -7,7 +7,8 @@ A real-time voice conversation application powered by Google's Gemini 2.0 Live A
 - **Real-time Voice Streaming**: Capture microphone audio and stream to Gemini's native audio model
 - **WebSocket Communication**: Bidirectional audio streaming between client and server
 - **Live Transcription**: Real-time transcription of both user and AI speech
-- **Modern Tech Stack**: React 18, TypeScript, Vite, Tailwind CSS
+- **Conversation History**: Automatically save conversations to Supabase
+- **Modern Tech Stack**: React 18, TypeScript, Vite, Tailwind CSS, Supabase
 - **Production Ready**: Clean architecture, error handling, and session management
 
 ## 🏗️ Architecture
