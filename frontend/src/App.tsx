@@ -55,6 +55,7 @@ const App: React.FC = () => {
   const vadRef = useRef<VoiceActivityDetector | null>(null);
   const bargeInTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isBargeInActiveRef = useRef<boolean>(false);
+  const isAISpeakingRef = useRef<boolean>(false);
   
   const stopAudioProcessing = useCallback(() => {
     if (mediaStreamRef.current) {
@@ -172,6 +173,7 @@ const App: React.FC = () => {
       
       // Mark AI as speaking
       setIsAISpeaking(true);
+      isAISpeakingRef.current = true;
       
       audioSourcesRef.current.add(source);
       source.onended = () => {
@@ -179,12 +181,14 @@ const App: React.FC = () => {
         // If no more audio chunks playing, AI is done speaking
         if (audioSourcesRef.current.size === 0) {
           setIsAISpeaking(false);
+          isAISpeakingRef.current = false;
           isBargeInActiveRef.current = false; // Reset barge-in flag when naturally done
         }
       };
     } catch (error) {
       console.error('Error playing audio chunk:', error);
       setIsAISpeaking(false);
+      isAISpeakingRef.current = false;
     }
   }, []);
 
@@ -231,6 +235,7 @@ const App: React.FC = () => {
     }, 50); // Reduced from 100ms
     
     setIsAISpeaking(false);
+    isAISpeakingRef.current = false;
     
     // Send interrupt signal to backend
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -274,13 +279,21 @@ const App: React.FC = () => {
         // Reset barge-in flag for new session
         isBargeInActiveRef.current = false;
         
-        // @ts-ignore
-        inputAudioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-        // @ts-ignore
-        outputAudioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+        try {
+          // @ts-ignore
+          inputAudioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+          // @ts-ignore
+          outputAudioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
 
-        mediaStreamSourceRef.current = inputAudioContextRef.current.createMediaStreamSource(stream);
-        scriptProcessorRef.current = inputAudioContextRef.current.createScriptProcessor(4096, 1, 1);
+          mediaStreamSourceRef.current = inputAudioContextRef.current.createMediaStreamSource(stream);
+          scriptProcessorRef.current = inputAudioContextRef.current.createScriptProcessor(4096, 1, 1);
+        } catch (audioError) {
+          console.error("Audio context setup error:", audioError);
+          setErrorMessage('Audio setup failed: ' + (audioError as Error).message);
+          setSessionState(SessionState.ERROR);
+          ws.close();
+          return;
+        }
         
         scriptProcessorRef.current.onaudioprocess = (audioProcessingEvent) => {
           const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
@@ -295,13 +308,14 @@ const App: React.FC = () => {
 
         // Initialize Voice Activity Detection for barge-in
         if (inputAudioContextRef.current && stream) {
-          vadRef.current = new VoiceActivityDetector(inputAudioContextRef.current, stream, 20); // Very sensitive threshold
+          vadRef.current = new VoiceActivityDetector(inputAudioContextRef.current, stream, 40); // Increased threshold to reduce false positives
           
           let activityStartTime: number | null = null;
-          const SUSTAINED_ACTIVITY_THRESHOLD = 80; // ms - ultra-fast trigger (reduced from 150ms)
+          const SUSTAINED_ACTIVITY_THRESHOLD = 200; // ms - increased from 80ms to reduce false positives
           
           vadRef.current.startListening(() => {
-            if (isAISpeaking) {
+            // ONLY trigger barge-in if AI is ACTUALLY speaking and barge-in isn't already active
+            if (isAISpeakingRef.current && !isBargeInActiveRef.current) {
               if (!activityStartTime) {
                 activityStartTime = Date.now();
               } else if (Date.now() - activityStartTime > SUSTAINED_ACTIVITY_THRESHOLD) {
@@ -316,7 +330,7 @@ const App: React.FC = () => {
             } else {
               activityStartTime = null;
             }
-          }, 20); // Check every 20ms (reduced from 30ms) for ultra-fast response
+          }, 50); // Increased from 20ms to reduce CPU load and false positives
           
           console.log('✓ Voice Activity Detection enabled for barge-in');
         }
@@ -404,11 +418,16 @@ const App: React.FC = () => {
     }
   }, [handleStopSession, playAudioChunk, handleRetry, handleBargeIn, sessionState, isAISpeaking]);
   
+  // Cleanup on component unmount only
   useEffect(() => {
     return () => {
-      handleStopSession();
+      // Only cleanup when component actually unmounts
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.close();
+      }
+      stopAudioProcessing();
     };
-  }, [handleStopSession]);
+  }, []); // Empty dependency array = only run on mount/unmount
 
   return (
     <div className="flex flex-col h-screen font-sans bg-slate-900 text-white p-4 max-w-3xl mx-auto">
