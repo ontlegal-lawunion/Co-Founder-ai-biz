@@ -102,8 +102,54 @@ function setSessionTimeout(ws: WebSocket) {
 }
 
 wss.on('connection', async (ws) => {
-  console.log('Client connected. Initializing Gemini session...');
+  console.log('Client connected. Waiting for initialization...');
 
+  let sessionInitialized = false;
+  let initTimeout: NodeJS.Timeout | undefined;
+
+  // Wait for init message with conversation context (timeout after 5 seconds)
+  initTimeout = setTimeout(() => {
+    if (!sessionInitialized) {
+      console.log('❌ No init message received, closing connection');
+      ws.close();
+    }
+  }, 5000);
+
+  // Temporary message handler for initialization
+  const initHandler = async (message: Buffer) => {
+    if (sessionInitialized) return;
+
+    try {
+      const data = JSON.parse(message.toString());
+      
+      if (data.type === 'init') {
+        clearTimeout(initTimeout);
+        sessionInitialized = true;
+
+        // Build enhanced system prompt with conversation context
+        let enhancedPrompt = systemPrompt;
+        
+        if (data.conversationContext && data.conversationContext.trim()) {
+          enhancedPrompt = `${systemPrompt}\n\n${data.conversationContext}\n\nUse this context to provide personalized and continuous support. Reference past conversations when relevant, but keep responses natural and conversational.`;
+          console.log('✓ Loaded conversation context for AI memory');
+        }
+
+        console.log('Initializing Gemini session with enhanced prompt...');
+        
+        // Remove init handler and set up actual session
+        ws.off('message', initHandler);
+        await initializeSession(ws, enhancedPrompt);
+      }
+    } catch (error) {
+      console.error('Error parsing init message:', error);
+      ws.close();
+    }
+  };
+
+  ws.on('message', initHandler);
+});
+
+async function initializeSession(ws: WebSocket, prompt: string) {
   // Set initial timeout
   setSessionTimeout(ws);
 
@@ -115,7 +161,7 @@ wss.on('connection', async (ws) => {
         inputAudioTranscription: {},
         outputAudioTranscription: {},
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
-        systemInstruction: systemPrompt,
+        systemInstruction: prompt,
       },
       callbacks: {
         onopen: () => {
@@ -347,7 +393,7 @@ wss.on('connection', async (ws) => {
       sessions.delete(ws);
     }
   });
-});
+}
 
 // Health check endpoint
 app.get('/health', (req, res) => {

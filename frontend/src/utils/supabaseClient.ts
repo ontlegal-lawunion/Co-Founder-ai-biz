@@ -17,6 +17,22 @@ export interface ConversationRecord {
   message_count: number;
   archived: boolean;
   notes: string | null;
+  summary: string | null;
+  key_points: string[] | null;
+}
+
+export interface Tag {
+  id: string;
+  name: string;
+  color: string;
+  created_at: string;
+}
+
+export interface ConversationTag {
+  id: string;
+  conversation_id: string;
+  tag_id: string;
+  created_at: string;
 }
 
 export interface MessageRecord {
@@ -265,6 +281,173 @@ export async function updateUserPreferences(
     return data;
   } catch (error) {
     console.error('❌ Error updating preferences:', error);
+    throw error;
+  }
+}
+
+/**
+ * Tag Management Functions
+ */
+
+/**
+ * Get all available tags
+ */
+export async function getTags(): Promise<Tag[]> {
+  try {
+    const { data, error } = await supabase
+      .from('tags')
+      .select('*')
+      .order('name');
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('❌ Error fetching tags:', error);
+    throw error;
+  }
+}
+
+/**
+ * Create a new tag
+ */
+export async function createTag(name: string, color: string = '#6B7280'): Promise<Tag> {
+  try {
+    const { data, error } = await supabase
+      .from('tags')
+      .insert({ name, color })
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('❌ Error creating tag:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get tags for a specific conversation
+ */
+export async function getConversationTags(conversationId: string): Promise<Tag[]> {
+  try {
+    const { data, error } = await supabase
+      .from('conversation_tags')
+      .select('tag_id, tags(*)')
+      .eq('conversation_id', conversationId);
+
+    if (error) throw error;
+    return data?.map(ct => ct.tags as unknown as Tag) || [];
+  } catch (error) {
+    console.error('❌ Error fetching conversation tags:', error);
+    throw error;
+  }
+}
+
+/**
+ * Add tags to a conversation
+ */
+export async function addTagsToConversation(conversationId: string, tagIds: string[]): Promise<void> {
+  try {
+    const records = tagIds.map(tagId => ({
+      conversation_id: conversationId,
+      tag_id: tagId,
+    }));
+
+    const { error } = await supabase
+      .from('conversation_tags')
+      .insert(records);
+
+    if (error) throw error;
+  } catch (error) {
+    console.error('❌ Error adding tags to conversation:', error);
+    throw error;
+  }
+}
+
+/**
+ * Remove a tag from a conversation
+ */
+export async function removeTagFromConversation(conversationId: string, tagId: string): Promise<void> {
+  try {
+    const { error } = await supabase
+      .from('conversation_tags')
+      .delete()
+      .eq('conversation_id', conversationId)
+      .eq('tag_id', tagId);
+
+    if (error) throw error;
+  } catch (error) {
+    console.error('❌ Error removing tag from conversation:', error);
+    throw error;
+  }
+}
+
+/**
+ * AI Memory Functions
+ */
+
+/**
+ * Get recent conversations for AI context (last 5 conversations with summaries)
+ */
+export async function getRecentConversationsForContext(limit: number = 5): Promise<string> {
+  try {
+    const { data, error } = await supabase
+      .from('conversations')
+      .select('created_at, title, summary, key_points')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) throw error;
+    
+    if (!data || data.length === 0) {
+      return '';
+    }
+
+    // Format conversations into context string
+    const contextParts = data.map((conv, index) => {
+      const date = new Date(conv.created_at).toLocaleDateString();
+      let context = `[${date}] ${conv.title}`;
+      
+      if (conv.summary) {
+        context += `\nSummary: ${conv.summary}`;
+      }
+      
+      if (conv.key_points && conv.key_points.length > 0) {
+        context += `\nKey points: ${conv.key_points.join(', ')}`;
+      }
+      
+      return context;
+    }).join('\n\n');
+
+    return `Previous conversation context:\n${contextParts}`;
+  } catch (error) {
+    console.error('❌ Error fetching conversation context:', error);
+    return '';
+  }
+}
+
+/**
+ * Update conversation summary and key points (can be done after conversation ends)
+ */
+export async function updateConversationSummary(
+  conversationId: string,
+  summary: string,
+  keyPoints: string[]
+): Promise<void> {
+  try {
+    const { error } = await supabase
+      .from('conversations')
+      .update({
+        summary,
+        key_points: keyPoints,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', conversationId);
+
+    if (error) throw error;
+  } catch (error) {
+    console.error('❌ Error updating conversation summary:', error);
     throw error;
   }
 }

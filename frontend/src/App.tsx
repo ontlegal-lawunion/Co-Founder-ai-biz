@@ -3,10 +3,18 @@ import { Message, SessionState } from './types';
 import { prepareAudioChunk, decode, decodeAudioData } from './utils/audioUtils';
 import { VoiceActivityDetector } from './utils/voiceActivityDetection';
 import { useConversations } from './utils/useConversations';
+import { 
+  getTags, 
+  createTag, 
+  addTagsToConversation, 
+  getRecentConversationsForContext,
+  Tag 
+} from './utils/supabaseClient';
 import ConversationMessage from './components/ConversationMessage';
 import Controls from './components/Controls';
 import StatusIndicator from './components/StatusIndicator';
 import AudioVisualizer from './components/AudioVisualizer';
+import { TagSelector } from './components/TagSelector';
 
 // WebSocket configuration
 const WS_URL = 'ws://localhost:8080';
@@ -36,6 +44,9 @@ const App: React.FC = () => {
   const [retryCount, setRetryCount] = useState(0);
   const [isAISpeaking, setIsAISpeaking] = useState(false);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
+  const [availableTags, setAvailableTags] = useState<Tag[]>([]);
+  const [selectedTags, setSelectedTags] = useState<Tag[]>([]);
+  const [savedConversationId, setSavedConversationId] = useState<string | null>(null);
 
   // Supabase conversation management
   const { saveCurrentConversation, savingConversation } = useConversations();
@@ -103,7 +114,18 @@ const App: React.FC = () => {
           : 0;
         
         const sessionId = `session-${Date.now()}`;
-        await saveCurrentConversation(sessionId, transcript, durationSeconds);
+        const conversation = await saveCurrentConversation(sessionId, transcript, durationSeconds);
+        
+        // Add tags to the conversation
+        if (conversation && selectedTags.length > 0) {
+          await addTagsToConversation(
+            conversation.id, 
+            selectedTags.map(t => t.id)
+          );
+          console.log(`✅ Added ${selectedTags.length} tags to conversation`);
+        }
+        
+        setSavedConversationId(conversation?.id || null);
       } catch (error) {
         console.error('Failed to save conversation:', error);
       }
@@ -120,7 +142,7 @@ const App: React.FC = () => {
     audioSourcesRef.current.clear();
     nextStartTimeRef.current = 0;
     setSessionStartTime(null);
-  }, [stopAudioProcessing, transcript, sessionStartTime, saveCurrentConversation]);
+  }, [stopAudioProcessing, transcript, sessionStartTime, saveCurrentConversation, selectedTags]);
 
 
   const handleRetry = useCallback(() => {
@@ -271,10 +293,21 @@ const App: React.FC = () => {
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
 
-      ws.onopen = () => {
+      ws.onopen = async () => {
         console.log("WebSocket connection opened");
         setRetryCount(0);
         setErrorMessage('');
+        
+        // Load conversation context for AI memory
+        const conversationContext = await getRecentConversationsForContext(5);
+        
+        // Send init message with conversation context
+        ws.send(JSON.stringify({
+          type: 'init',
+          conversationContext: conversationContext,
+        }));
+        
+        console.log('✓ Sent conversation context to AI');
         
         // Reset barge-in flag for new session
         isBargeInActiveRef.current = false;
@@ -429,6 +462,40 @@ const App: React.FC = () => {
     };
   }, []); // Empty dependency array = only run on mount/unmount
 
+  // Load available tags on mount
+  useEffect(() => {
+    const loadTags = async () => {
+      try {
+        const tags = await getTags();
+        setAvailableTags(tags);
+      } catch (error) {
+        console.error('Failed to load tags:', error);
+      }
+    };
+    loadTags();
+  }, []);
+
+  const handleTagToggle = (tag: Tag) => {
+    setSelectedTags(prev => {
+      const isSelected = prev.some(t => t.id === tag.id);
+      if (isSelected) {
+        return prev.filter(t => t.id !== tag.id);
+      } else {
+        return [...prev, tag];
+      }
+    });
+  };
+
+  const handleCreateTag = async (name: string, color: string) => {
+    try {
+      const newTag = await createTag(name, color);
+      setAvailableTags(prev => [...prev, newTag]);
+      setSelectedTags(prev => [...prev, newTag]);
+    } catch (error) {
+      console.error('Failed to create tag:', error);
+    }
+  };
+
   return (
     <div className="flex flex-col h-screen font-sans bg-slate-900 text-white p-4 max-w-3xl mx-auto">
       <header className="text-center p-4 border-b border-slate-700">
@@ -475,6 +542,17 @@ const App: React.FC = () => {
              </div>
         )}
       </main>
+
+      {sessionState === SessionState.IDLE && (
+        <div className="p-4 border-t border-slate-700 bg-slate-800/50">
+          <TagSelector
+            availableTags={availableTags}
+            selectedTags={selectedTags}
+            onTagToggle={handleTagToggle}
+            onCreateTag={handleCreateTag}
+          />
+        </div>
+      )}
 
       <footer className="flex flex-col items-center justify-center p-4 border-t border-slate-700 bg-slate-900 sticky bottom-0">
         <AudioVisualizer 
